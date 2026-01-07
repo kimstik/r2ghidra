@@ -28,12 +28,17 @@ incdirs = [
   'src',
 ]
 
-res = run_command(['radare2','-HR2_LIBR_PLUGINS'], capture:true, check:false)
-if res.returncode() == 0
-  r2_plugdir = res.stdout().strip()
-else
+if meson.is_cross_build()
   prefix = get_option('prefix')
-  r2_plugdir = prefix + '/lib/radare2/plugins'
+  r2_plugdir = prefix / 'lib/radare2/plugins'
+else
+  res = run_command(['radare2','-HR2_LIBR_PLUGINS'], capture:true, check:false)
+  if res.returncode() == 0
+    r2_plugdir = res.stdout().strip()
+  else
+    prefix = get_option('prefix')
+    r2_plugdir = prefix / 'lib/radare2/plugins'
+  endif
 endif
 
 cpp = meson.get_compiler('cpp')
