@@ -70,7 +70,7 @@ jobs:
       - name: Configure
         run: |
           export PKG_CONFIG_PATH=$PWD/radare2/lib/pkgconfig
-          meson setup build --cross-file=cross-mingw64.txt --buildtype=release -Ddefault_library=shared
+          meson setup build --cross-file=cross-mingw64.txt --buildtype=release -Ddefault_library=shared --force-fallback-for=zlib
 
       - name: Build
         run: meson compile -C build
