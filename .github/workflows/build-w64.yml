@@ -1,0 +1,65 @@
+name: Build Windows x64 (MSVC)
+
+on:
+  push:
+    branches: [w64]
+  pull_request:
+    branches: [w64]
+  workflow_dispatch:
+
+env:
+  R2V: 6.0.8
+
+jobs:
+  w64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install build tools
+        run: pip install ninja meson wget
+
+      - name: Install zlib via vcpkg
+        run: vcpkg install zlib:x64-windows
+
+      - name: Download radare2
+        shell: bash
+        run: |
+          python -m wget https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-${{env.R2V}}-w64.zip -o r2.zip
+          unzip r2.zip
+          mv radare2-${{env.R2V}}-w64 radare2
+
+      - name: Configure
+        shell: cmd
+        run: |
+          set PKG_CONFIG_PATH=%CD%\radare2\lib\pkgconfig
+          set PATH=%CD%\radare2\bin;%PATH%
+          meson setup build --buildtype=release -Ddefault_library=shared --cmake-prefix-path=C:\vcpkg\installed\x64-windows
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p artifact
+          cp build/core_r2ghidra.dll artifact/ 2>/dev/null || true
+          ls -la artifact/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2ghidra-w64-${{ github.sha }}
+          path: artifact/*.dll
+          if-no-files-found: error

@@ -1,0 +1,89 @@
+name: Build Windows x64 (MinGW cross)
+
+on:
+  push:
+    branches: [w64-mingw]
+  pull_request:
+    branches: [w64-mingw]
+  workflow_dispatch:
+
+env:
+  R2V: 6.0.8
+
+jobs:
+  w64-mingw:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 ninja-build
+          pip install meson
+
+      - name: Download radare2 Linux (for sleigh build)
+        run: |
+          wget -q https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2_${{env.R2V}}_amd64.deb
+          wget -q https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-dev_${{env.R2V}}_amd64.deb
+          sudo dpkg -i radare2_${{env.R2V}}_amd64.deb radare2-dev_${{env.R2V}}_amd64.deb
+
+      - name: Download radare2 Windows
+        run: |
+          wget -q https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-${{env.R2V}}-w64.zip
+          unzip -q radare2-${{env.R2V}}-w64.zip
+          mv radare2-${{env.R2V}}-w64 radare2
+
+      - name: Fix pkg-config paths
+        run: |
+          cd radare2/lib/pkgconfig
+          for f in *.pc; do
+            sed -i "s|^prefix=.*|prefix=$PWD/../..|" "$f"
+          done
+
+      - name: Create cross-file
+        run: |
+          cat > cross-mingw64.txt << 'EOF'
+          [binaries]
+          c = 'x86_64-w64-mingw32-gcc-posix'
+          cpp = 'x86_64-w64-mingw32-g++-posix'
+          ar = 'x86_64-w64-mingw32-ar'
+          strip = 'x86_64-w64-mingw32-strip'
+          windres = 'x86_64-w64-mingw32-windres'
+          pkgconfig = 'pkg-config'
+
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'x86_64'
+          cpu = 'x86_64'
+          endian = 'little'
+
+          [built-in options]
+          cpp_args = ['-D_WINDOWS', '-D_WIN32']
+          c_args = ['-D_WINDOWS', '-D_WIN32']
+          cpp_link_args = ['-static-libgcc', '-static-libstdc++']
+          c_link_args = ['-static-libgcc']
+          EOF
+
+      - name: Configure
+        run: |
+          export PKG_CONFIG_PATH=$PWD/radare2/lib/pkgconfig
+          meson setup build --cross-file=cross-mingw64.txt --buildtype=release -Ddefault_library=shared
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Package
+        run: |
+          mkdir -p artifact
+          cp build/libcore_r2ghidra.dll artifact/core_r2ghidra.dll 2>/dev/null || cp build/core_r2ghidra.dll artifact/ 2>/dev/null || true
+          ls -la artifact/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2ghidra-w64-mingw-${{ github.sha }}
+          path: artifact/*.dll
+          if-no-files-found: error
