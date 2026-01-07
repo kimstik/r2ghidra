@@ -24,21 +24,15 @@ jobs:
           sudo apt-get install -y mingw-w64 ninja-build
           pip install meson
 
-      - name: Download radare2 Linux (for sleigh build)
-        run: |
-          wget -q https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2_${{env.R2V}}_amd64.deb
-          wget -q https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-dev_${{env.R2V}}_amd64.deb
-          sudo dpkg -i radare2_${{env.R2V}}_amd64.deb radare2-dev_${{env.R2V}}_amd64.deb
-
       - name: Download radare2 Windows
         run: |
           wget -q https://github.com/radareorg/radare2/releases/download/${{env.R2V}}/radare2-${{env.R2V}}-w64.zip
           unzip -q radare2-${{env.R2V}}-w64.zip
-          mv radare2-${{env.R2V}}-w64 radare2
+          mv radare2-${{env.R2V}}-w64 r2-sdk
 
       - name: Fix pkg-config paths
         run: |
-          cd radare2/lib/pkgconfig
+          cd r2-sdk/lib/pkgconfig
           for f in *.pc; do
             sed -i "s|^prefix=.*|prefix=$PWD/../..|" "$f"
           done
@@ -69,11 +63,11 @@ jobs:
 
       - name: Configure
         run: |
-          export PKG_CONFIG_PATH=$PWD/radare2/lib/pkgconfig
-          meson setup build --cross-file=cross-mingw64.txt --buildtype=release -Ddefault_library=shared
+          export PKG_CONFIG_PATH=$PWD/r2-sdk/lib/pkgconfig
+          meson setup build --cross-file=cross-mingw64.txt --buildtype=release -Ddefault_library=shared --force-fallback-for=zlib
 
       - name: Build
-        run: meson compile -C build
+        run: meson compile -C build core_r2ghidra
 
       - name: Package
         run: |
