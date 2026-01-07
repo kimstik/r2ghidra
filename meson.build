@@ -42,14 +42,16 @@ if cpp.get_id() == 'msvc'
     'r2-sdk/include/libr',
     'r2-sdk/include/libr/sdb',
   ]
-  add_global_arguments('-D_WINDOWS', language:'cpp')
-  add_global_arguments('-D_WIN32', language:'cpp')
-  add_global_arguments('-DZLIB_WINAPI', language:'cpp')
+  foreach lang : ['c', 'cpp']
+    add_global_arguments('-D_WINDOWS', language: lang)
+    add_global_arguments('-D_WIN32', language: lang)
+    add_global_arguments('-DZLIB_WINAPI', language: lang)
+    add_global_arguments('/O2', language: lang)
+  endforeach
   add_global_arguments('/wd4200', language:'cpp')  # Suppress C4200: zero-sized array in struct
   add_global_arguments('/wd4576', language:'cpp')  # Suppress C4576: compound literals from r2 headers
   r2libdir = [
-    meson.current_source_dir() + '\\r2-sdk\\lib',
-    'C:\\radare2\\lib'
+    meson.current_source_dir() / 'r2-sdk' / 'lib',
   ]
   r_core = [
     cpp.find_library('r_core', dirs: r2libdir),

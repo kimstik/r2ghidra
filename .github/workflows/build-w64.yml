@@ -54,8 +54,14 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifact
-          cp build/core_r2ghidra.dll artifact/ 2>/dev/null || true
-          ls -la artifact/
+          if [ -f "build/core_r2ghidra.dll" ]; then
+            cp build/core_r2ghidra.dll artifact/
+            ls -la artifact/
+          else
+            echo "ERROR: core_r2ghidra.dll not found!"
+            find build -name "*.dll" 2>/dev/null
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
