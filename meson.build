@@ -39,15 +39,16 @@ endif
 cpp = meson.get_compiler('cpp')
 if cpp.get_id() == 'msvc'
   incdirs += [
-    'radare2/include/libr',
-    'radare2/include/libr/sdb',
+    'r2-sdk/include/libr',
+    'r2-sdk/include/libr/sdb',
   ]
   add_global_arguments('-D_WINDOWS', language:'cpp')
   add_global_arguments('-D_WIN32', language:'cpp')
   add_global_arguments('-DZLIB_WINAPI', language:'cpp')
   add_global_arguments('/wd4200', language:'cpp')  # Suppress C4200: zero-sized array in struct
+  add_global_arguments('/permissive', language:'cpp')  # Allow compound literals from r2 headers
   r2libdir = [
-    meson.current_source_dir() + '\\radare2\\lib',
+    meson.current_source_dir() + '\\r2-sdk\\lib',
     'C:\\radare2\\lib'
   ]
   r_core = [
