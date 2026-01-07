@@ -2,9 +2,14 @@ name: Build Windows x64 (MSVC)
 
 on:
   push:
-    branches: [w64]
+    branches: [master]
+    paths:
+      - '.github/workflows/build-w64.yml'
+      - 'src/**'
+      - 'meson.build'
+      - 'subprojects/**'
   pull_request:
-    branches: [w64]
+    branches: [master]
   workflow_dispatch:
 
 env:

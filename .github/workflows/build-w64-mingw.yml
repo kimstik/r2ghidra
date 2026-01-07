@@ -2,9 +2,14 @@ name: Build Windows x64 (MinGW cross)
 
 on:
   push:
-    branches: [w64-mingw]
+    branches: [master]
+    paths:
+      - '.github/workflows/build-w64-mingw.yml'
+      - 'src/**'
+      - 'meson.build'
+      - 'subprojects/**'
   pull_request:
-    branches: [w64-mingw]
+    branches: [master]
   workflow_dispatch:
 
 env:
