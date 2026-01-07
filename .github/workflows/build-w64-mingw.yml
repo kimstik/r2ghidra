@@ -57,8 +57,8 @@ jobs:
           [built-in options]
           cpp_args = ['-D_WINDOWS', '-D_WIN32']
           c_args = ['-D_WINDOWS', '-D_WIN32']
-          cpp_link_args = ['-static-libgcc', '-static-libstdc++']
-          c_link_args = ['-static-libgcc']
+          cpp_link_args = ['-static-libgcc', '-static-libstdc++', '-static']
+          c_link_args = ['-static-libgcc', '-static']
           EOF
 
       - name: Configure
