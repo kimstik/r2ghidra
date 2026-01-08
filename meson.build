@@ -46,8 +46,16 @@ if cpp.get_id() == 'msvc'
     add_global_arguments('-D_WINDOWS', language: lang)
     add_global_arguments('-D_WIN32', language: lang)
     add_global_arguments('-DZLIB_WINAPI', language: lang)
-    add_global_arguments('/O2', language: lang)
+    # Size optimization + LTO
+    add_global_arguments('/O1', language: lang)
+    add_global_arguments('/GL', language: lang)
+    add_global_arguments('/Gw', language: lang)
+    add_global_arguments('/Zc:inline', language: lang)
   endforeach
+  # Linker flags for LTO
+  add_global_link_arguments('/LTCG', language: ['c', 'cpp'])
+  add_global_link_arguments('/OPT:REF', language: ['c', 'cpp'])
+  add_global_link_arguments('/OPT:ICF', language: ['c', 'cpp'])
   add_global_arguments('/wd4200', language:'cpp')  # Suppress C4200: zero-sized array in struct
   add_global_arguments('/wd4576', language:'cpp')  # Suppress C4576: compound literals from r2 headers
   r2libdir = [
