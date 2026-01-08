@@ -39,8 +39,8 @@ jobs:
       - name: Install build tools
         run: pip install ninja meson wget
 
-      - name: Install zlib via vcpkg
-        run: vcpkg install zlib:${{ matrix.vcpkg_triplet }}
+      # - name: Install zlib via vcpkg
+      #   run: vcpkg install zlib:${{ matrix.vcpkg_triplet }}
 
       - name: Download radare2
         shell: bash
@@ -54,7 +54,8 @@ jobs:
         run: |
           set PKG_CONFIG_PATH=%CD%\r2-sdk\lib\pkgconfig
           set PATH=%CD%\r2-sdk\bin;%PATH%
-          meson setup build --buildtype=release -Ddefault_library=shared --cmake-prefix-path=C:\vcpkg\installed\${{ matrix.vcpkg_triplet }}
+          rem meson setup build --buildtype=release -Ddefault_library=shared --cmake-prefix-path=C:\vcpkg\installed\${{ matrix.vcpkg_triplet }}
+          meson setup build --buildtype=release -Ddefault_library=shared
 
       - name: Build
         run: meson compile -C build core_r2ghidra
