@@ -3,7 +3,7 @@ project(
   ['c', 'cpp'],
   license : 'LGPL3',
   meson_version : '>=0.50.1',
-version : '6.0.8',
+version : '6.1.0',
   default_options : ['c_std=c11', 'cpp_std=c++20']
 )
 
@@ -45,6 +45,11 @@ if cpp.get_id() == 'msvc'
   add_global_arguments('-D_WINDOWS', language:'cpp')
   add_global_arguments('-D_WIN32', language:'cpp')
   add_global_arguments('-DZLIB_WINAPI', language:'cpp')
+  # BEGIN: r2-6.0.8 hacks
+  add_global_arguments('-DR_ARENA_H=1', language:'cpp')
+  add_global_arguments('-DRArena=int', language:'cpp')
+  add_global_arguments('-DRSlice=int', language:'cpp')
+  # END: r2-6.0.8 hacks
   add_global_arguments('/wd4200', language:'cpp')  # Suppress C4200: zero-sized array in struct
   add_global_arguments('/permissive', language:'cpp')  # Allow compound literals from r2 headers
   r2libdir = [

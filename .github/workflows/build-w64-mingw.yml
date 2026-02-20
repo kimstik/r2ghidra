@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 env:
-  R2V: 6.0.8
+  R2V: 6.1.0
 
 jobs:
   w64-mingw:

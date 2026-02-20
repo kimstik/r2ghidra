@@ -1,9 +1,10 @@
-/* r2ghidra- LGPL - Copyright 2019-2025 - thestr4ng3r, pancake */
+/* r2ghidra- LGPL - Copyright 2019-2026 - thestr4ng3r, pancake, 0verflowme */
 
 #include "R2Architecture.h"
 #include "R2TypeFactory.h"
 #include "R2Scope.h"
 
+#include <functional>
 #include <funcdata.hh>
 
 #include <r_version.h>
@@ -84,6 +85,197 @@ static Element *childType(Element *el, Datatype *type) {
 static std::string to_string(const char *str) {
 	return std::string (str ? str : "(null)");
 }
+
+static bool is_structured_type(Datatype *type) {
+	if (!type) {
+		return false;
+	}
+	if (Datatype *td = type->getTypedef()) {
+		return is_structured_type(td);
+	}
+	if (type->isEnumType()) {
+		return true;
+	}
+	switch (type->getMetatype()) {
+	case TYPE_STRUCT:
+	case TYPE_UNION:
+		return true;
+	default:
+		break;
+	}
+	if (auto ptr = dynamic_cast<TypePointer *>(type)) {
+		return is_structured_type(ptr->getPtrTo());
+	}
+	if (auto arr = dynamic_cast<TypeArray *>(type)) {
+		return is_structured_type(arr->getBase());
+	}
+	return false;
+}
+
+#if R2_ABIVERSION >= 50
+struct SigArg {
+	std::string name;
+	Datatype *type;
+};
+
+// Helper function to process function signature from radare2's type database
+// and emit parameter symbols to the decompiler
+static void processFunctionSignature(
+	R2Architecture *arch,
+	const char *fcn_name,
+	ProtoModel *proto,
+	int default_size,
+	bool have_arg_vars,
+	Element *symbollistElement,
+	RangeList &varRanges,
+	bool &used_sig_args,
+	bool &have_sig_proto,
+	PrototypePieces &sig_proto,
+	std::function<void(Element *)> childRegRange)
+{
+	std::vector<SigArg> sig_args;
+	int4 sig_first_vararg = -1;
+	Datatype *sig_ret_type = nullptr;
+
+	{
+		RCoreLock core_lock (arch->getCore ());
+		Sdb *tdb = core_lock->anal->sdb_types;
+		char *fname = r_type_func_guess (tdb, fcn_name);
+		if (fname && r_type_func_exist (tdb, fname)) {
+			const char *ret_name = r_type_func_ret (tdb, fname);
+			if (R_STR_ISNOTEMPTY (ret_name)) {
+				std::string typeError;
+				sig_ret_type = arch->getTypeFactory ()->fromCString (ret_name, &typeError);
+				if (!sig_ret_type) {
+					arch->addWarning ("Failed to match return type " + to_string (ret_name) + " for function " + to_string (fcn_name));
+				}
+			}
+
+			const int argc = r_type_func_args_count (tdb, fname);
+			for (int i = 0; i < argc; i++) {
+				char *arg_type = r_type_func_args_type (tdb, fname, i);
+				if (!arg_type) {
+					continue;
+				}
+				std::string arg_type_str = arg_type;
+				free (arg_type);
+				if (arg_type_str == "...") {
+					sig_first_vararg = i;
+					break;
+				}
+
+				const char *arg_name = r_type_func_args_name (tdb, fname, i);
+				std::string name = (R_STR_ISNOTEMPTY (arg_name))
+					? std::string (arg_name)
+					: ("arg" + to_string (i));
+
+				std::string typeError;
+				Datatype *type = arch->getTypeFactory ()->fromCString (arg_type_str.c_str (), &typeError);
+				if (!type) {
+					arch->addWarning ("Failed to match arg type " + arg_type_str + " for function " + to_string (fcn_name) + ": " + typeError);
+					type = arch->types->getBase (default_size, TYPE_UNKNOWN);
+				}
+				if (type && type->getSize () > 0) {
+					sig_args.push_back ({name, type});
+				}
+			}
+		}
+		free (fname);
+	}
+
+	if (sig_args.empty ()) {
+		return;
+	}
+
+	PrototypePieces protoPieces;
+	protoPieces.model = proto;
+	protoPieces.name = fcn_name;
+	protoPieces.outtype = sig_ret_type ? sig_ret_type : arch->types->getBase (default_size, TYPE_UNKNOWN);
+	protoPieces.firstVarArgSlot = sig_first_vararg;
+	for (const auto &arg : sig_args) {
+		protoPieces.intypes.push_back (arg.type);
+		protoPieces.innames.push_back (arg.name);
+	}
+	bool sig_has_structured = is_structured_type (protoPieces.outtype);
+	if (!sig_has_structured) {
+		for (const auto &arg : sig_args) {
+			if (is_structured_type (arg.type)) {
+				sig_has_structured = true;
+				break;
+			}
+		}
+	}
+	have_sig_proto = sig_has_structured;
+	if (have_sig_proto) {
+		sig_proto = protoPieces;
+	}
+
+	std::vector<ParameterPieces> pieces;
+	try {
+		proto->assignParameterStorage (protoPieces, pieces, true);
+	} catch (const LowlevelError &err) {
+		arch->addWarning ("Failed to assign parameter storage for " + to_string (fcn_name) + ": " + err.explain);
+		pieces.clear ();
+	}
+
+	bool sig_has_stack = false;
+	for (size_t i = 1; i < pieces.size (); i++) {
+		auto &piece = pieces[i];
+		if (piece.flags & ParameterPieces::hiddenretparm) {
+			continue;
+		}
+		if (piece.addr.isInvalid ()) {
+			continue;
+		}
+		if (piece.addr.getSpace () == arch->translate->getStackSpace ()) {
+			sig_has_stack = true;
+			break;
+		}
+	}
+	if (!pieces.empty () && !(sig_has_stack && have_arg_vars)) {
+		used_sig_args = true;
+	}
+	if (used_sig_args) {
+		size_t sig_index = 0;
+		for (size_t i = 1; i < pieces.size () && sig_index < sig_args.size (); i++) {
+			auto &piece = pieces[i];
+			if (piece.flags & ParameterPieces::hiddenretparm) {
+				continue;
+			}
+			if (piece.addr.isInvalid ()) {
+				continue;
+			}
+
+			const auto &arg = sig_args[sig_index++];
+			auto mapsymElement = child (symbollistElement, "mapsym");
+			auto symbolElement = child (mapsymElement, "symbol", {
+				{ "name", arg.name },
+				{ "typelock", "true" },
+				{ "namelock", "true" },
+				{ "readonly", "true" },
+				{ "cat", "0" },
+				{ "index", to_string (sig_index - 1) }
+			});
+
+			childType (symbolElement, arg.type);
+			childAddr (mapsymElement, "addr", piece.addr);
+
+			uintb last = piece.addr.getOffset ();
+			if (arg.type && arg.type->getSize () > 0) {
+				last += arg.type->getSize () - 1;
+			}
+			if (last >= piece.addr.getOffset ()) {
+				varRanges.insertRange (piece.addr.getSpace (), piece.addr.getOffset (), last);
+			}
+
+			auto rangelist = child (mapsymElement, "rangelist");
+			if (piece.addr.getSpace () != arch->translate->getStackSpace ()) {
+				childRegRange (rangelist);
+			}
+		}
+	}
+}
+#endif
 
 FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 	// lol globals
@@ -226,11 +418,11 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 	std::map<RAnalVar *, Datatype *> var_types;
 
 	ParamActive params (false);
-#if R2_VERSION_NUMBER >= 50609
 	const int default_size = core->anal->config->bits / 8;
-#else
-	const int default_size = core->anal->bits / 8;
-#endif
+	bool have_arg_vars = false;
+	bool used_sig_args = false;
+	bool have_sig_proto = false;
+	PrototypePieces sig_proto;
 
 	if (vars) {
 		r_list_foreach_cpp<RAnalVar>(vars, [&](RAnalVar *var) {
@@ -251,12 +443,17 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 			if (!var->isarg) {
 				return;
 			}
+			have_arg_vars = true;
 			auto addr = addrForVar(var, true);
 			if (addr.isInvalid()) {
 				return;
 			}
-			params.registerTrial(addr, type->getSize());
-			int4 i = params.whichTrial(addr, type->getSize());
+			int4 paramSize = type->getSize();
+			if (var->kind == R_ANAL_VAR_KIND_REG && paramSize < default_size) {
+				paramSize = default_size;
+			}
+			params.registerTrial(addr, paramSize);
+			int4 i = params.whichTrial(addr, paramSize);
 			params.getTrial(i).markActive();
 			params.getTrial(i).markUsed();
 		});
@@ -279,10 +476,20 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 		});
 	};
 
+#if R2_ABIVERSION >= 50
+	if (proto) {
+		processFunctionSignature (arch, fcn_name, proto, default_size, have_arg_vars,
+			symbollistElement, varRanges, used_sig_args, have_sig_proto, sig_proto, childRegRange);
+	}
+#endif
+
 	if (vars) {
 		std::vector<Element *> argsByIndex;
 
 		r_list_foreach_cpp<RAnalVar>(vars, [&](RAnalVar *var) {
+			if (used_sig_args && var->isarg) {
+				return;
+			}
 			auto type_it = var_types.find(var);
 			if (type_it == var_types.end())
 				return;
@@ -326,13 +533,17 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 
 			int4 paramIndex = -1;
 			if (var->isarg) {
-				if (proto && !proto->possibleInputParam(addr, type->getSize())) {
+				int4 paramSize = type->getSize();
+				if (var->kind == R_ANAL_VAR_KIND_REG && paramSize < default_size) {
+					paramSize = default_size;
+				}
+				if (proto && !proto->possibleInputParam(addr, paramSize)) {
 					// Prevent segfaults in the Decompiler
 					arch->addWarning ("Removing arg " + to_string(var->name) + " because it doesn't fit into ProtoModel");
 					return;
 				}
 
-				int4 paramTrialIndex = params.whichTrial(addr, type->getSize());
+				int4 paramTrialIndex = params.whichTrial(addr, paramSize);
 				if (paramTrialIndex < 0) {
 					arch->addWarning ("Failed to determine arg index of " + to_string(var->name));
 					return;
@@ -461,7 +672,14 @@ FunctionSymbol *R2Scope::registerFunction(RAnalFunction *fcn) const {
 
 	XmlDecode dec(arch, &doc);
 	auto sym = cache->addMapSym (dec);
-	return dynamic_cast<FunctionSymbol *>(sym);
+	auto funcsym = dynamic_cast<FunctionSymbol *>(sym);
+	if (funcsym && have_sig_proto && sig_proto.model) {
+		Funcdata *fd = funcsym->getFunction();
+		if (fd) {
+			fd->getFuncProto().setPieces(sig_proto);
+		}
+	}
+	return funcsym;
 }
 
 Symbol *R2Scope::registerFlag(RFlagItem *flag) const {
@@ -476,12 +694,7 @@ Symbol *R2Scope::registerFlag(RFlagItem *flag) const {
 		void *pos;
 		r_list_foreach (core->bin->binfiles, iter, pos) {
 			auto bf = reinterpret_cast<RBinFile *>(pos);
-			RBinObject *bo = NULL;
-#if R2_VERSION_NUMBER < 50809
-			bo = bf->o;
-#else
-			bo = bf->bo;
-#endif
+			RBinObject *bo = bf->bo;
 			if (!bo) {
 				continue;
 			}
@@ -528,7 +741,7 @@ Symbol *R2Scope::registerFlag(RFlagItem *flag) const {
 	const ut64 at = flag->offset;
 #endif
 	SymbolEntry *entry = cache->addSymbol (name, type, Address (arch->getDefaultCodeSpace(), at), Address());
-	if (!entry) {
+	if (entry == nullptr) {
 		return nullptr;
 	}
 
@@ -538,11 +751,70 @@ Symbol *R2Scope::registerFlag(RFlagItem *flag) const {
 	return symbol;
 }
 
+static Datatype *formatCharToType(TypeFactory *types, char fmt, int default_size) {
+	switch (fmt) {
+	case 'b': return types->getBase (1, TYPE_UINT);
+	case 'c': return types->getBase (1, TYPE_INT);
+	case 'w': return types->getBase (2, TYPE_UINT);
+	case 'W': return types->getBase (2, TYPE_INT);
+	case 'd': return types->getBase (4, TYPE_INT);
+	case 'x': return types->getBase (4, TYPE_UINT);
+	case 'i': return types->getBase (4, TYPE_INT);
+	case 'q': return types->getBase (8, TYPE_INT);
+	case 'Q': return types->getBase (8, TYPE_UINT);
+	case 'f': return types->getBase (4, TYPE_FLOAT);
+	case 'F': return types->getBase (8, TYPE_FLOAT);
+	case 'p':
+	case '*':
+		return types->getBase (default_size, TYPE_UINT);
+	default:
+		return nullptr;
+	}
+}
+
+Symbol *R2Scope::registerGlobalVar(RFlagItem *glob, const char *type_str) const {
+	RCoreLock core (arch->getCore ());
+	uint4 attr = Varnode::namelock | Varnode::typelock;
+
+#if R2_VERSION_NUMBER >= 50909
+	ut64 addr = glob->addr;
+#else
+	ut64 addr = glob->offset;
+#endif
+
+	Datatype *type = nullptr;
+	std::string typeError;
+	const int default_size = core->anal->config->bits / 8;
+
+	type = arch->getTypeFactory ()->fromCString (type_str, &typeError);
+	if (!type && type_str && type_str[0]) {
+		type = formatCharToType (arch->types, type_str[0], default_size);
+	}
+	if (!type) {
+		arch->addWarning ("Failed to create type for global variable "
+			+ to_string (glob->name) + ", using default int");
+		type = arch->types->getBase (default_size, TYPE_INT);
+	}
+	if (!type) {
+		return nullptr;
+	}
+
+	const char *name = (core->flags->realnames && glob->realname)
+		? glob->realname : glob->name;
+	SymbolEntry *entry = cache->addSymbol (name, type,
+		Address (arch->getDefaultCodeSpace (), addr), Address ());
+	if (!entry) {
+		return nullptr;
+	}
+	auto symbol = entry->getSymbol ();
+	cache->setAttribute (symbol, attr);
+	return symbol;
+}
+
 Symbol *R2Scope::queryR2Absolute(ut64 addr, bool contain) const {
 	RCoreLock core (arch->getCore ());
 
 	RAnalFunction *fcn = r_anal_get_function_at (core->anal, addr);
-#if 1
 	// This can cause functions to be registered twice (hello-arm test)
 	if (!fcn && contain) {
 		RList *fcns = r_anal_get_functions_in (core->anal, addr);
@@ -551,11 +823,17 @@ Symbol *R2Scope::queryR2Absolute(ut64 addr, bool contain) const {
 		}
 		r_list_free (fcns);
 	}
-#endif
 	if (fcn) {
 		return registerFunction (fcn);
 	}
-	// TODO: register more things
+
+	RFlagItem *glob = r_anal_global_get (core->anal, addr);
+	if (glob) {
+		const char *type_str = r_anal_global_get_type (core->anal, addr);
+		if (type_str) {
+			return registerGlobalVar (glob, type_str);
+		}
+	}
 
 	// TODO: correctly handle contain for flags
 	const RList *flags = r_flag_get_list (core->flags, addr);
@@ -587,12 +865,8 @@ LabSymbol *R2Scope::queryR2FunctionLabel(const Address &addr) const {
 	if (!fcn) {
 		return nullptr;
 	}
-#if R2_VERSION_NUMBER < 40600
-	const char *label = r_anal_fcn_label_at (core->anal, fcn, addr.getOffset());
-#else
 	const char *label = r_anal_function_get_label_at (fcn, addr.getOffset());
-#endif
-	if (label) {
+	if (label != nullptr) {
 		return cache->addCodeLabel (addr, label);
 	}
 	return nullptr;
@@ -641,7 +915,7 @@ Funcdata *R2Scope::findFunction(const Address &addr) const {
 	}
 	auto at = queryR2 (addr, false);
 	FunctionSymbol *sym = dynamic_cast<FunctionSymbol *>(at);
-	if (sym) {
+	if (sym != nullptr) {
 		return sym->getFunction ();
 	}
 	return nullptr;
@@ -662,13 +936,13 @@ ExternRefSymbol *R2Scope::findExternalRef(const Address &addr) const {
 
 LabSymbol *R2Scope::findCodeLabel(const Address &addr) const {
 	LabSymbol *sym = cache->findCodeLabel (addr);
-	if (sym) {
+	if (sym != nullptr) {
 		return sym;
 	}
 	// Check if this address has already been queried,
 	// (returning a symbol other than a code label)
 	SymbolEntry *entry = cache->findAddr (addr, Address());
-	if (entry) {
+	if (entry != nullptr) {
 		return queryR2FunctionLabel (addr);
 	}
 	return nullptr;

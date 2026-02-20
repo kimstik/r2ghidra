@@ -5,13 +5,13 @@ ifeq ($(NEED_ZLIB),1)
   DEPS += zlib
 endif
 
-ALL=$(basename $(wildcard *.mk))
+ALL=$(filter-out zlib-deps,$(basename $(wildcard *.mk)))
 
-default: $(DEPS)
+default: zlib-static $(DEPS)
 
 all: $(ALL)
 
 clean:
 	rm -rf $(ALL)
 
-include *.mk
+include ghidra-native.mk pugixml.mk zlib.mk zlib-deps.mk
